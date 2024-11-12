@@ -165,4 +165,6 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         return stakeHelper.lockTime();
     }
 
+    // Storage gap for upgradeable contracts
+    uint256[50] private __gap;
 }

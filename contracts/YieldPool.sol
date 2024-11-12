@@ -155,4 +155,7 @@ contract YieldPool is OwnableUpgradeable, ReentrancyGuardUpgradeable, UUPSUpgrad
         // Emit event to notify about the reward distribution
         emit RewardDistributed(amount);
     }
+
+    // Storage gap for upgradeable contracts
+    uint256[50] private __gap;
 }
