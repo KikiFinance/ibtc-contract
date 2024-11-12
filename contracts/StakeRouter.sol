@@ -59,6 +59,20 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         }
     }
 
+    function _sortValidatorsByPriority(uint256 startIndex) internal {
+        // Sort validators array based on priority, starting from startIndex
+        for (uint256 i = startIndex; i > 0; i--) {
+            if (validators[i].priority > validators[i - 1].priority) {
+                // Swap elements
+                Validator memory temp = validators[i];
+                validators[i] = validators[i - 1];
+                validators[i - 1] = temp;
+            } else {
+                break; // Break early if the list is already sorted
+            }
+        }
+    }
+
     function addValidator(
         address _validator,
         uint256 _minStake,
@@ -73,17 +87,38 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         validators.push(Validator(_validator, _minStake, _maxStake, _priority, 0));
         emit ValidatorAdded(_validator, _minStake, _maxStake, _priority);
 
-        // Sort validators based on priority (lower value indicates higher priority)
-        for (uint256 i = validators.length - 1; i > 0; i--) {
-            if (validators[i].priority > validators[i - 1].priority) {
-                // Swap elements
-                Validator memory temp = validators[i];
-                validators[i] = validators[i - 1];
-                validators[i - 1] = temp;
-            } else {
-                break; // Break early if the list is already sorted
-            }
+        // Sort validators based on priority
+        _sortValidatorsByPriority(validators.length - 1);
+    }
+
+    function updateValidator(
+        address _validator,
+        uint256 _minStake,
+        uint256 _maxStake,
+        uint256 _priority
+    ) external onlyOwner {
+        require(_minStake <= _maxStake, "Minimum stake must be less than maximum stake");
+
+        int256 index = getValidatorIndex(_validator);
+        require(index >= 0, "Validator not found");
+
+        Validator storage validator = validators[uint256(index)];
+
+        // If currentStake is greater than 0, ensure it falls within the new range
+        if (validator.currentStake > 0) {
+            require(
+                validator.currentStake >= _minStake && validator.currentStake <= _maxStake,
+                "Current stake must be within the new minimum and maximum range"
+            );
         }
+
+        // Update validator properties
+        validator.minStake = _minStake;
+        validator.maxStake = _maxStake;
+        validator.priority = _priority;
+
+        // Sort validators based on priority after the update
+        _sortValidatorsByPriority(uint256(index));
     }
 
     function deposit(uint256 _amount) external onlyIBTC nonReentrant {
