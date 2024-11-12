@@ -32,6 +32,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     event Withdraw(uint256 amount);
     event RewardDistributedPrepare(address indexed validator);
     event RewardDistributed(uint256 amount);
+    event Restake(address indexed from, address indexed to, uint256 amount);
 
 
     modifier onlyIBTC() {
@@ -105,7 +106,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
                 stakeHelper.deposit(validators[i].validatorAddress, stakeAmount);
                 validators[i].currentStake += stakeAmount;
                 remainingAmount -= stakeAmount;
-                emit Stake(validators[i].validatorAddress, _amount);
+                emit Stake(validators[i].validatorAddress, stakeAmount);
             }
         }
         require(remainingAmount == 0, "Not enough validator capacity for stake");
@@ -159,6 +160,43 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
 
         xsat.safeTransfer(address(iBTC), amount);
         emit RewardDistributed(amount);
+    }
+
+    function restake(address _from, address _to, uint256 _amount) external onlyOwner nonReentrant {
+        require(_amount > 0, "Amount must be greater than zero");
+
+        // Get the indexes of the _from and _to validators
+        int256 fromIndex = getValidatorIndex(_from);
+        int256 toIndex = getValidatorIndex(_to);
+
+        require(fromIndex >= 0 && toIndex >= 0, "Invalid validator address");
+
+        Validator storage fromValidator = validators[uint256(fromIndex)];
+        Validator storage toValidator = validators[uint256(toIndex)];
+
+        // Ensure _from has enough staked amount to restake
+        require(fromValidator.currentStake >= _amount, "Insufficient stake in _from validator");
+
+        // Ensure _to's stake does not exceed its maximum
+        require(toValidator.currentStake + _amount <= toValidator.maxStake, "Exceeds max stake for _to validator");
+
+        // Perform the restake through stakeHelper
+        stakeHelper.restake(_from, _to, _amount);
+
+        // Update validator stakes
+        fromValidator.currentStake -= _amount;
+        toValidator.currentStake += _amount;
+
+        emit Restake(_from, _to, _amount);
+    }
+
+    function getValidatorIndex(address _validator) internal view returns (int256) {
+        for (uint256 i = 0; i < validators.length; i++) {
+            if (validators[i].validatorAddress == _validator) {
+                return int256(i);
+            }
+        }
+        return -1; // Not found
     }
 
     function lockTime() external view returns (uint256){
