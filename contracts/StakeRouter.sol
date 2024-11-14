@@ -14,7 +14,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
 
     struct Validator {
         address validatorAddress;
-        uint256 minStake;
+        uint256 minStakePerTx;
         uint256 maxStake;
         uint256 priority;
         uint256 currentStake;
@@ -26,7 +26,8 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     IStakeHelper public stakeHelper;
     Validator[] public validators;
 
-    event ValidatorAdded(address indexed validator, uint256 minStake, uint256 maxStake, uint256 priority);
+    event ValidatorAdded(address indexed validator, uint256 minStakePerTx, uint256 maxStake, uint256 priority);
+    event ValidatorUpdated(address indexed validator, uint256 minStakePerTx, uint256 maxStake, uint256 priority);
     event Stake(address indexed validator, uint256 amount);
     event UnStake(address indexed validator, uint256 amount);
     event Withdraw(uint256 amount);
@@ -75,17 +76,19 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
 
     function addValidator(
         address _validator,
-        uint256 _minStake,
+        uint256 _minStakePerTx,
         uint256 _maxStake,
         uint256 _priority
     ) external onlyOwner {
+        require(_minStakePerTx <= _maxStake, "Minimum stake must be less than maximum stake");
+
         // Check if the validator already exists
         for (uint256 i = 0; i < validators.length; i++) {
             require(validators[i].validatorAddress != _validator, "Validator already exists");
         }
 
-        validators.push(Validator(_validator, _minStake, _maxStake, _priority, 0));
-        emit ValidatorAdded(_validator, _minStake, _maxStake, _priority);
+        validators.push(Validator(_validator, _minStakePerTx, _maxStake, _priority, 0));
+        emit ValidatorAdded(_validator, _minStakePerTx, _maxStake, _priority);
 
         // Sort validators based on priority
         _sortValidatorsByPriority(validators.length - 1);
@@ -93,11 +96,11 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
 
     function updateValidator(
         address _validator,
-        uint256 _minStake,
+        uint256 _minStakePerTx,
         uint256 _maxStake,
         uint256 _priority
     ) external onlyOwner {
-        require(_minStake <= _maxStake, "Minimum stake must be less than maximum stake");
+        require(_minStakePerTx <= _maxStake, "Minimum stake must be less than maximum stake");
 
         int256 index = getValidatorIndex(_validator);
         require(index >= 0, "Validator not found");
@@ -107,15 +110,16 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         // If currentStake is greater than 0, ensure it falls within the new range
         if (validator.currentStake > 0) {
             require(
-                validator.currentStake >= _minStake && validator.currentStake <= _maxStake,
-                "Current stake must be within the new minimum and maximum range"
+                validator.currentStake <= _maxStake,
+                "Current stake must be less than or equal to the maximum stake"
             );
         }
 
         // Update validator properties
-        validator.minStake = _minStake;
+        validator.minStakePerTx = _minStakePerTx;
         validator.maxStake = _maxStake;
         validator.priority = _priority;
+        emit ValidatorUpdated(_validator, _minStakePerTx, _maxStake, _priority);
 
         // Sort validators based on priority after the update
         _sortValidatorsByPriority(uint256(index));
@@ -132,7 +136,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
             if (
                 remainingAmount > 0 &&
                 validators[i].currentStake < validators[i].maxStake &&
-                remainingAmount >= validators[i].minStake
+                remainingAmount >= validators[i].minStakePerTx
             ) {
                 uint256 stakeAmount = remainingAmount;
                 if (validators[i].currentStake + remainingAmount > validators[i].maxStake) {

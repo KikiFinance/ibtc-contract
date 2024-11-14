@@ -5,7 +5,7 @@ interface IStakeRouter {
 
     function addValidator(
         address _validator,
-        uint256 _minStake,
+        uint256 _minStakePerTx,
         uint256 _maxStake,
         uint256 _priority
     ) external;
