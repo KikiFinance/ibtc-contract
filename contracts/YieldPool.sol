@@ -13,7 +13,7 @@ contract YieldPool is OwnableUpgradeable, ReentrancyGuardUpgradeable, UUPSUpgrad
     IERC20 public xsat; // The reward token (XSAT)
     uint256 public totalStaked;
     uint256 public minDeposit;
-    uint256 private constant PRECISION = 1e12;
+    uint256 private constant PRECISION = 1e18;
     uint256 public accRewardPerShare; // Accumulated reward per iBTC share
 
     struct RedemptionRequest {

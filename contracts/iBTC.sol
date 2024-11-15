@@ -17,7 +17,7 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     IERC20 public xsat; // XSAT token interface
     IStakeRouter public stakeRouter; // Reference to the stake router contract
 
-    uint256 private constant PRECISION = 1e12; // Precision for reward calculations
+    uint256 private constant PRECISION = 1e18; // Precision for reward calculations
     uint256 public accRewardPerShare; // Accumulated reward per iBTC share, scaled by PRECISION
     uint256 public xsatBalanceBefore; // Previous XSAT balance for reward distribution calculations
     mapping(address => uint256) public rewardDebt; // Tracks reward debt for each user
