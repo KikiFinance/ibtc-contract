@@ -53,6 +53,7 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
 
     // Handles reward settlement for a user
     function _settleReward(address userAddress) internal {
+        require(xsatBalanceBefore == 0, "distributed rewards not yet finish");
         uint256 pending = _pendingReward(userAddress);
         if (pending > 0) {
             xsat.safeTransfer(userAddress, pending); // Transfer pending XSAT reward
