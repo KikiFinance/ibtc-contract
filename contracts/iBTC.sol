@@ -9,12 +9,14 @@ import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "./IStakeRouter.sol";
 import "./IiBTC.sol";
+import "./IXBTC.sol";
 
 contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpgradeable, UUPSUpgradeable {
     using SafeERC20 for IERC20;
 
     IERC20 public xbtc; // XBTC token interface
     IERC20 public xsat; // XSAT token interface
+    IXBTC public ixbtc; // XBTC token interface
     IStakeRouter public stakeRouter; // Reference to the stake router contract
 
     uint256 private constant PRECISION = 1e18; // Precision for reward calculations
@@ -22,6 +24,7 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     uint256 public xsatBalanceBefore; // Previous XSAT balance for reward distribution calculations
     mapping(address => uint256) public rewardDebt; // Tracks reward debt for each user
     mapping(address => WithdrawalRequest[]) public userWithdrawals; // Tracks user-specific withdrawal requests
+
 
     event Deposit(address indexed user, uint256 amount); // Emitted when a deposit occurs
     event WithdrawRequested(address indexed user, uint256 amount, uint256 timestamp); // Emitted when a withdrawal is requested
@@ -36,7 +39,14 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
         __UUPSUpgradeable_init();
         xbtc = IERC20(_xbtc);
         xsat = IERC20(_xsat);
+        ixbtc = IXBTC(_xbtc);
         stakeRouter = IStakeRouter(_stakeRouter);
+    }
+
+    receive() external payable {
+        if (msg.sender != address(ixbtc)) {
+            depositBTC();
+        }
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -97,11 +107,30 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     }
 
     // Allows users to stake XBTC and mint an equivalent amount of iBTC tokens
-    function deposit(uint256 amount) external nonReentrant {
+    function deposit(uint256 amount) public nonReentrant {
         _settleReward(msg.sender);
 
         require(amount > 0, "Amount must be greater than 0");
         xbtc.safeTransferFrom(msg.sender, address(this), amount);
+
+        // Approve and stake the deposited XBTC with the StakeRouter
+        xbtc.safeApprove(address(stakeRouter), amount);
+        stakeRouter.deposit(amount);
+
+        // Mint iBTC tokens at a 1:1 ratio with XBTC
+        _mint(msg.sender, amount);
+
+        // Update user's reward debt based on their new balance
+        rewardDebt[msg.sender] = (balanceOf(msg.sender) * accRewardPerShare) / PRECISION;
+        emit Deposit(msg.sender, amount);
+    }
+
+    function depositBTC() public payable nonReentrant {
+        uint256 amount = msg.value;
+        require(amount > 0, "Amount must be greater than 0");
+        ixbtc.deposit{value: amount}();
+
+        _settleReward(msg.sender);
 
         // Approve and stake the deposited XBTC with the StakeRouter
         xbtc.safeApprove(address(stakeRouter), amount);
@@ -142,9 +171,8 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
         emit WithdrawRequested(msg.sender, amount, unlockTimestamp);
     }
 
-    // Processes and finalizes any unlocked withdrawal requests for XBTC
-    function withdraw() external nonReentrant {
-        uint256 totalAmount = 0;
+    function _processWithdrawals() internal returns (uint256 totalAmount) {
+        totalAmount = 0; // Explicitly initialize totalAmount
         uint256 index = 0;
 
         // Iterate through user's withdrawal requests and process unlocked ones
@@ -167,12 +195,29 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
 
         // Finalize pending withdrawal with the StakeRouter
         stakeRouter.claimPendingFunds();
+    }
+
+    function withdraw() external nonReentrant {
+        uint256 totalAmount = _processWithdrawals();
 
         // Transfer the accumulated amount of XBTC to the user
         xbtc.safeTransfer(msg.sender, totalAmount);
 
         emit Withdraw(msg.sender, totalAmount);
     }
+
+    function withdrawBTC() external nonReentrant {
+        uint256 totalAmount = _processWithdrawals();
+
+        // Convert the XBTC to BTC using the XBTC contract's `withdraw` method
+        ixbtc.withdraw(totalAmount);
+
+        // Transfer the BTC to the user
+        payable(msg.sender).transfer(totalAmount);
+
+        emit Withdraw(msg.sender, totalAmount);
+    }
+
 
     // Allows users to manually claim accumulated XSAT rewards
     function claimReward() external nonReentrant {
