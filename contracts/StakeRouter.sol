@@ -125,6 +125,27 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         _sortValidatorsByPriority(uint256(index));
     }
 
+    function removeValidator(address _validator) external onlyOwner {
+        int256 index = getValidatorIndex(_validator);
+        require(index >= 0, "Validator not found");
+
+        uint256 validatorIndex = uint256(index);
+        Validator storage validatorToRemove = validators[validatorIndex];
+
+        // Ensure the validator's current stake is zero before removal
+        require(
+            validatorToRemove.currentStake == 0,
+            "Cannot remove a validator with an active stake"
+        );
+
+        // Move the last element into the place of the element to be removed
+        validators[validatorIndex] = validators[validators.length - 1];
+        validators.pop(); // Remove the last element
+
+        emit ValidatorUpdated(_validator, 0, 0, 0); // Optionally emit an event to signal removal
+    }
+
+
     function deposit(uint256 _amount) external onlyIBTC nonReentrant {
         require(_amount > 0, "Amount must be greater than 0");
         xbtc.safeTransferFrom(address(iBTC), address(this), _amount);
