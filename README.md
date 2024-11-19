@@ -32,21 +32,30 @@
 - StakeRouter relies on the stakeHelper contract to handle lower-level staking and un-staking operations with individual validators.
 - It directly interacts with the iBTC contract to ensure only iBTC can trigger certain operations (e.g., staking and withdrawal).
 
-## 3. YieldPool Contract
-### Functionality:
-
-- The YieldPool functions as a deposit vault for iBTC, managing and storing user deposits securely.
-- iBTC stored in the YieldPool cannot be moved and can only be redeemed by the users themselves.
-- It manages the staking and yield distribution processes for iBTC deposits, ensuring controlled operations for deposits, withdrawals, and yield allocations.
-- The YieldPool may include mechanisms for partner locks and other features to ensure security and transparency in deposit handling.
-
-### Dependencies:
-
-- YieldPool interacts with iBTC for managing staking and yield distribution.
-- It operates independently of the StakeRouter and has no direct relationship with it.
-
 ## Summary of Relationships and Dependencies:
 - iBTC <--> StakeRouter: iBTC leverages StakeRouter to manage staking operations. All XBTC deposit and withdrawal requests are routed through StakeRouter.
 - StakeRouter <--> StakeHelper(exsat official): StakeRouter interacts with multiple validators through stakeHelper to manage the delegation and un-delegation of XBTC.
-- YieldPool <--> iBTC: YieldPool serves as a vault for iBTC deposits, with all deposits, withdrawals, and yield distributions handled solely through iBTC. iBTC in the YieldPool can only be redeemed by users themselves.
 
+
+## 3.Bridge Contract
+### Functionality:
+
+- The Bridge contract facilitates cross-chain transfers of iBTC tokens between the exSat network and other networks (e.g., Ethereum).
+- Key functions include:
+  - Deposit: Users can deposit iBTC to the Bridge contract on one network. This triggers an event monitored by oracles, initiating a cross-chain minting process.
+  - Withdraw: Users can withdraw iBTC from the Bridge contract by burning the corresponding iBTC amount on another supported network. Oracles validate the transaction to confirm its legitimacy.
+  - Guardian Signature Verification: The Bridge relies on a quorum of guardians to verify cross-chain transactions. This ensures security and prevents unauthorized transfers.
+  - Mint: When a user deposits iBTC to the Bridge on one network, the contract on the other network mints the equivalent iBTC amount, maintaining a 1:1 peg across chains.
+  - Cross-Chain Burn: For withdrawals, the iBTC tokens are burned on one network, reducing the total supply to maintain the peg consistency across chains.
+
+### Dependencies:
+
+- Oracles: The Bridge relies on oracles to monitor events and relay information between the exSat network and other networks. They play a critical role in ensuring transactions are legitimate and correctly processed across different chains.
+- Guardian Signatures: The Bridge contract requires a set number of valid guardian signatures (a quorum) for certain sensitive operations, such as minting iBTC on the target network. This helps ensure security and decentralization.
+- On the exSat network, cross-chain transfers of iBTC are achieved through locking and unlocking operations. When users deposit iBTC on the exSat side, the tokens are locked in the contract rather than being minted or burned. This ensures that the iBTC supply on the exSat network remains constant while cross-chain transfers are handled.
+- On other EVM-compatible chains, the Bridge contract is responsible for minting and burning iBTC. This ensures a 1:1 peg with the iBTC tokens locked on the exSat network. When users deposit or withdraw iBTC on these chains, the Bridge contract handles minting or burning the tokens to maintain consistency.
+
+## Summary of Relationships and Dependencies for the Bridge:
+- iBTC <--> Bridge (Lock and Mint Mechanism): The iBTC contract interacts with the Bridge contract to facilitate cross-chain transfers of iBTC. On the exSat network, iBTC tokens are locked when initiating a cross-chain transfer, while on other EVM-compatible chains, the Bridge contract mints the equivalent amount of iBTC tokens. Similarly, when iBTC is transferred back, the process involves burning the iBTC on the EVM-compatible chain and unlocking it on the exSat network, maintaining a consistent 1:1 peg across networks.
+- Bridge <--> Oracles: Oracles monitor events on the Bridge contract to facilitate cross-chain communication and ensure legitimate cross-chain transfers.
+- Bridge <--> Guardians: The Bridge relies on a set of trusted guardians to verify sensitive transactions through signature validation, enhancing security and decentralization.
