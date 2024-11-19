@@ -9,9 +9,9 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
-
-contract iBTCOriginBridge is Initializable, OwnableUpgradeable, PausableUpgradeable, UUPSUpgradeable {
+contract iBTCOriginBridge is Initializable, OwnableUpgradeable, PausableUpgradeable, UUPSUpgradeable, AccessControlUpgradeable {
     using ECDSA for bytes32;
 
     ERC20 public ibtcToken; // ERC-20 iBTC token on exSat
@@ -21,6 +21,7 @@ contract iBTCOriginBridge is Initializable, OwnableUpgradeable, PausableUpgradea
     mapping(address => uint256) private guardianIndicesOneBased;
     uint256 public quorum;
     bytes32 public WITHDRAW_MESSAGE_PREFIX;
+    bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
 
     struct Signature {
         bytes32 r;
@@ -41,12 +42,15 @@ contract iBTCOriginBridge is Initializable, OwnableUpgradeable, PausableUpgradea
         __Ownable_init();
         __Pausable_init();
         __UUPSUpgradeable_init();
+        __AccessControl_init();
+
+        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender); // Grant owner default admin role
+        _setupRole(OPERATOR_ROLE, msg.sender); // Grant owner initial operator role
 
         ibtcToken = ERC20(_ibtcToken);
         xSATToken = ERC20(_xSATToken);
 
         WITHDRAW_MESSAGE_PREFIX = keccak256(abi.encodePacked(keccak256("CrossChainWithdraw"), block.chainid, address(this)));
-
     }
 
     // Required by UUPSUpgradeable
@@ -114,8 +118,8 @@ contract iBTCOriginBridge is Initializable, OwnableUpgradeable, PausableUpgradea
         emit Withdraw(msgHash, burnTxHash, msg.sender, amount);
     }
 
-    // Transfer xSAT tokens
-    function transferXSAT(address to, uint256 amount) external onlyOwner whenNotPaused {
+    // Transfer xSAT tokens with operator role
+    function transferXSAT(address to, uint256 amount) external onlyRole(OPERATOR_ROLE) whenNotPaused {
         require(xSATToken.balanceOf(address(this)) >= amount, "Insufficient xSAT balance");
         xSATToken.transfer(to, amount);
         emit XSATTransferred(to, amount);
