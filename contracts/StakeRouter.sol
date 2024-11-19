@@ -6,11 +6,14 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "./IStakeHelper.sol";
 import "./IStakeRouter.sol";
 
-contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgradeable, UUPSUpgradeable {
+contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessControlUpgradeable {
     using SafeERC20 for IERC20;
+
+    bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
 
     struct Validator {
         address validatorAddress;
@@ -28,6 +31,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
 
     event ValidatorAdded(address indexed validator, uint256 minStakePerTx, uint256 maxStake, uint256 priority);
     event ValidatorUpdated(address indexed validator, uint256 minStakePerTx, uint256 maxStake, uint256 priority);
+    event ValidatorRemoved(address indexed validator);
     event Stake(address indexed validator, uint256 amount);
     event UnStake(address indexed validator, uint256 amount);
     event Withdraw(uint256 amount);
@@ -35,9 +39,13 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     event RewardDistributed(uint256 amount);
     event Restake(address indexed from, address indexed to, uint256 amount);
 
-
     modifier onlyIBTC() {
         require(msg.sender == iBTC, "Only the iBTC contract can call this function");
+        _;
+    }
+
+    modifier onlyOperator() {
+        require(hasRole(OPERATOR_ROLE, msg.sender), "Caller is not an operator");
         _;
     }
 
@@ -45,6 +53,10 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         __Ownable_init();
         __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
+        __AccessControl_init();
+
+        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _setupRole(OPERATOR_ROLE, msg.sender);
 
         xbtc = IERC20(_xbtc);
         xsat = IERC20(_xsat);
@@ -53,7 +65,6 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
-    // One-Time Initialization
     function setIBTC(address _iBTC) external onlyOwner {
         if (iBTC == address(0)) {
             iBTC = _iBTC;
@@ -61,15 +72,13 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     }
 
     function _sortValidatorsByPriority(uint256 startIndex) internal {
-        // Sort validators array based on priority, starting from startIndex
         for (uint256 i = startIndex; i > 0; i--) {
             if (validators[i].priority > validators[i - 1].priority) {
-                // Swap elements
                 Validator memory temp = validators[i];
                 validators[i] = validators[i - 1];
                 validators[i - 1] = temp;
             } else {
-                break; // Break early if the list is already sorted
+                break;
             }
         }
     }
@@ -79,18 +88,15 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         uint256 _minStakePerTx,
         uint256 _maxStake,
         uint256 _priority
-    ) external onlyOwner {
+    ) external onlyOperator {
         require(_minStakePerTx <= _maxStake, "Minimum stake must be less than maximum stake");
 
-        // Check if the validator already exists
         for (uint256 i = 0; i < validators.length; i++) {
             require(validators[i].validatorAddress != _validator, "Validator already exists");
         }
 
         validators.push(Validator(_validator, _minStakePerTx, _maxStake, _priority, 0));
         emit ValidatorAdded(_validator, _minStakePerTx, _maxStake, _priority);
-
-        // Sort validators based on priority
         _sortValidatorsByPriority(validators.length - 1);
     }
 
@@ -99,7 +105,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         uint256 _minStakePerTx,
         uint256 _maxStake,
         uint256 _priority
-    ) external onlyOwner {
+    ) external onlyOperator {
         require(_minStakePerTx <= _maxStake, "Minimum stake must be less than maximum stake");
 
         int256 index = getValidatorIndex(_validator);
@@ -107,7 +113,6 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
 
         Validator storage validator = validators[uint256(index)];
 
-        // If currentStake is greater than 0, ensure it falls within the new range
         if (validator.currentStake > 0) {
             require(
                 validator.currentStake <= _maxStake,
@@ -115,34 +120,33 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
             );
         }
 
-        // Update validator properties
         validator.minStakePerTx = _minStakePerTx;
         validator.maxStake = _maxStake;
         validator.priority = _priority;
         emit ValidatorUpdated(_validator, _minStakePerTx, _maxStake, _priority);
-
-        // Sort validators based on priority after the update
         _sortValidatorsByPriority(uint256(index));
     }
 
-    function removeValidator(address _validator) external onlyOwner {
+    function removeValidator(address _validator) external onlyOperator {
         int256 index = getValidatorIndex(_validator);
         require(index >= 0, "Validator not found");
 
         uint256 validatorIndex = uint256(index);
         Validator storage validatorToRemove = validators[validatorIndex];
 
-        // Ensure the validator's current stake is zero before removal
         require(
             validatorToRemove.currentStake == 0,
             "Cannot remove a validator with an active stake"
         );
 
-        // Move the last element into the place of the element to be removed
-        validators[validatorIndex] = validators[validators.length - 1];
-        validators.pop(); // Remove the last element
+        // Shift elements to the left to maintain order
+        for (uint256 i = validatorIndex; i < validators.length - 1; i++) {
+            validators[i] = validators[i + 1];
+        }
 
-        emit ValidatorUpdated(_validator, 0, 0, 0); // Optionally emit an event to signal removal
+        // Remove the last element
+        validators.pop();
+        emit ValidatorRemoved(_validator);
     }
 
 
