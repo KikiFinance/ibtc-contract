@@ -71,17 +71,19 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         }
     }
 
-    function _sortValidatorsByPriority(uint256 startIndex) internal {
-        for (uint256 i = startIndex; i > 0; i--) {
-            if (validators[i].priority > validators[i - 1].priority) {
-                Validator memory temp = validators[i];
-                validators[i] = validators[i - 1];
-                validators[i - 1] = temp;
-            } else {
-                break;
+    function _sortValidatorsByPriority() internal {
+        uint256 n = validators.length;
+        for (uint256 i = 0; i < n; i++) {
+            for (uint256 j = 0; j < n - 1 - i; j++) {
+                if (validators[j].priority < validators[j + 1].priority) {
+                    Validator memory temp = validators[j];
+                    validators[j] = validators[j + 1];
+                    validators[j + 1] = temp;
+                }
             }
         }
     }
+
 
     function addValidator(
         address _validator,
@@ -97,7 +99,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
 
         validators.push(Validator(_validator, _minStakePerTx, _maxStake, _priority, 0));
         emit ValidatorAdded(_validator, _minStakePerTx, _maxStake, _priority);
-        _sortValidatorsByPriority(validators.length - 1);
+        _sortValidatorsByPriority();
     }
 
     function updateValidator(
@@ -123,9 +125,11 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         validator.minStakePerTx = _minStakePerTx;
         validator.maxStake = _maxStake;
         validator.priority = _priority;
+
         emit ValidatorUpdated(_validator, _minStakePerTx, _maxStake, _priority);
-        _sortValidatorsByPriority(uint256(index));
+        _sortValidatorsByPriority();
     }
+
 
     function removeValidator(address _validator) external onlyOperator {
         int256 index = getValidatorIndex(_validator);
@@ -255,9 +259,9 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     }
 
     function getValidatorIndex(address _validator) internal view returns (int256) {
-        for (uint256 i = 0; i < validators.length; i++) {
-            if (validators[i].validatorAddress == _validator) {
-                return int256(i);
+        for (uint256 i = validators.length; i > 0; i--) {
+            if (validators[i - 1].validatorAddress == _validator) {
+                return int256(i - 1);
             }
         }
         return -1; // Not found

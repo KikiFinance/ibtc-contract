@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
@@ -21,8 +22,7 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
 
     uint256 private constant PRECISION = 1e18; // Precision for reward calculations
     uint256 public accRewardPerShare; // Accumulated reward per iBTC share, scaled by PRECISION
-    uint256 public xsatBalanceBefore; // Previous XSAT balance for reward distribution calculations
-    mapping(address => uint256) public rewardDebt; // Tracks reward debt for each user
+    mapping(address => uint256) public userLastRewardPerShare; // Tracks the last accRewardPerShare for each user
     mapping(address => WithdrawalRequest[]) public userWithdrawals; // Tracks user-specific withdrawal requests
 
 
@@ -54,23 +54,19 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     // Calculates the pending reward for a user based on their balance
     function _pendingReward(address userAddress) internal view returns (uint256) {
         uint256 userBalance = balanceOf(userAddress);
-        uint256 accumulatedReward = (userBalance * accRewardPerShare) / PRECISION;
-        if (accumulatedReward > rewardDebt[userAddress]) {
-            return accumulatedReward - rewardDebt[userAddress];
-        }
-        return 0;
+        uint256 accumulatedReward = (userBalance * (accRewardPerShare - userLastRewardPerShare[userAddress])) / PRECISION;
+        return accumulatedReward;
     }
 
     // Handles reward settlement for a user
     function _settleReward(address userAddress) internal {
-        require(xsatBalanceBefore == 0, "distributed rewards not yet finish");
         uint256 pending = _pendingReward(userAddress);
         if (pending > 0) {
             xsat.safeTransfer(userAddress, pending); // Transfer pending XSAT reward
             emit ClaimReward(userAddress, pending);
         }
-        // Update the user's reward debt to reflect the latest accumulated reward per share
-        rewardDebt[userAddress] = (balanceOf(userAddress) * accRewardPerShare) / PRECISION;
+        // Update user's last reward per share
+        userLastRewardPerShare[userAddress] = accRewardPerShare;
     }
 
     // Override token transfer function to ensure reward settlement on any transfer, mint, or burn operation
@@ -87,11 +83,6 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     // Prepares for reward distribution by updating XSAT balance and initiating a claim
     function _prepareRewardDistribution() internal {
         require(totalSupply() > 0, "No staked XBTC to distribute rewards");
-        require(xsatBalanceBefore == 0, "Previous rewards not yet distributed");
-
-        // Record XSAT balance before claiming rewards
-        xsatBalanceBefore = xsat.balanceOf(address(this));
-
         // Trigger reward distribution through the StakeRouter
         stakeRouter.prepareRewardDistribution();
     }
@@ -108,7 +99,6 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
 
     // Allows users to stake XBTC and mint an equivalent amount of iBTC tokens
     function deposit(uint256 amount) public nonReentrant {
-        _settleReward(msg.sender);
 
         require(amount > 0, "Amount must be greater than 0");
         xbtc.safeTransferFrom(msg.sender, address(this), amount);
@@ -120,8 +110,6 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
         // Mint iBTC tokens at a 1:1 ratio with XBTC
         _mint(msg.sender, amount);
 
-        // Update user's reward debt based on their new balance
-        rewardDebt[msg.sender] = (balanceOf(msg.sender) * accRewardPerShare) / PRECISION;
         emit Deposit(msg.sender, amount);
     }
 
@@ -130,8 +118,6 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
         require(amount > 0, "Amount must be greater than 0");
         ixbtc.deposit{value: amount}();
 
-        _settleReward(msg.sender);
-
         // Approve and stake the deposited XBTC with the StakeRouter
         xbtc.safeApprove(address(stakeRouter), amount);
         stakeRouter.deposit(amount);
@@ -139,8 +125,6 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
         // Mint iBTC tokens at a 1:1 ratio with XBTC
         _mint(msg.sender, amount);
 
-        // Update user's reward debt based on their new balance
-        rewardDebt[msg.sender] = (balanceOf(msg.sender) * accRewardPerShare) / PRECISION;
         emit Deposit(msg.sender, amount);
     }
 
@@ -150,13 +134,8 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
         require(userBalance >= amount, "Insufficient iBTC balance");
         require(amount > 0, "Amount must be greater than zero");
 
-        _settleReward(msg.sender);
-
         // Burn the corresponding amount of iBTC tokens
         _burn(msg.sender, amount);
-
-        // Update user's reward debt to reflect their new balance
-        rewardDebt[msg.sender] = (balanceOf(msg.sender) * accRewardPerShare) / PRECISION;
 
         // Create a new withdrawal request with an unlock timestamp determined by the StakeRouter
         uint256 unlockTimestamp = block.timestamp + stakeRouter.lockTime();
@@ -213,7 +192,7 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
         ixbtc.withdraw(totalAmount);
 
         // Transfer the BTC to the user
-        payable(msg.sender).transfer(totalAmount);
+        Address.sendValue(payable(msg.sender), totalAmount);
 
         emit Withdraw(msg.sender, totalAmount);
     }
@@ -233,15 +212,15 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     function finalizeRewardDistribution() external nonReentrant {
         uint256 supply = totalSupply();
         require(supply > 0, "No iBTC in circulation for reward distribution");
+        // Record XSAT balance before claiming rewards
+        uint256 xsatBalanceBefore = xsat.balanceOf(address(this));
         stakeRouter.finalizeRewardDistribution();
-
         // Get the updated XSAT balance after reward distribution
         uint256 xsatBalanceAfter = xsat.balanceOf(address(this));
         require(xsatBalanceAfter >= xsatBalanceBefore, "Balance error: Insufficient XSAT");
 
         // Calculate the newly received rewards and reset the balance tracker
         uint256 amount = xsatBalanceAfter - xsatBalanceBefore;
-        xsatBalanceBefore = 0;
 
         // Update the accumulated reward per share for iBTC holders
         accRewardPerShare += (amount * PRECISION) / supply;
