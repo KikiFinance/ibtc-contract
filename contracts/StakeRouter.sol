@@ -71,16 +71,33 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         }
     }
 
-    function _sortValidatorsByPriority() internal {
-        uint256 n = validators.length;
-        for (uint256 i = 0; i < n; i++) {
-            for (uint256 j = 0; j < n - 1 - i; j++) {
-                if (validators[j].priority < validators[j + 1].priority) {
-                    Validator memory temp = validators[j];
-                    validators[j] = validators[j + 1];
-                    validators[j + 1] = temp;
-                }
+    // Partial Insertion Sort
+    function _sortAddedValidatorsByPriority(uint256 startIndex) internal {
+        for (uint256 i = startIndex; i > 0; i--) {
+            if (validators[i].priority > validators[i - 1].priority) {
+                Validator memory temp = validators[i];
+                validators[i] = validators[i - 1];
+                validators[i - 1] = temp;
+            } else {
+                break;
             }
+        }
+    }
+
+    // Insertion Sort
+    function _sortUpdatedValidatorsByPriority() internal {
+        uint256 n = validators.length;
+
+        for (uint256 i = 1; i < n; i++) {
+            Validator memory current = validators[i];
+            uint256 j = i;
+
+            while (j > 0 && validators[j - 1].priority < current.priority) {
+                validators[j] = validators[j - 1];
+                j--;
+            }
+
+            validators[j] = current;
         }
     }
 
@@ -99,7 +116,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
 
         validators.push(Validator(_validator, _minStakePerTx, _maxStake, _priority, 0));
         emit ValidatorAdded(_validator, _minStakePerTx, _maxStake, _priority);
-        _sortValidatorsByPriority();
+        _sortAddedValidatorsByPriority(validators.length - 1);
     }
 
     function updateValidator(
@@ -127,7 +144,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         validator.priority = _priority;
 
         emit ValidatorUpdated(_validator, _minStakePerTx, _maxStake, _priority);
-        _sortValidatorsByPriority();
+        _sortUpdatedValidatorsByPriority();
     }
 
 
