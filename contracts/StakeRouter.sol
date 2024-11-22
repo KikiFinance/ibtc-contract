@@ -84,20 +84,30 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         }
     }
 
-    // Insertion Sort
-    function _sortUpdatedValidatorsByPriority() internal {
+    // Half-Side Insertion Sort
+    function _sortUpdatedValidatorsByPriority(uint256 index) internal {
         uint256 n = validators.length;
+        Validator memory updated = validators[index];
 
-        for (uint256 i = 1; i < n; i++) {
-            Validator memory current = validators[i];
-            uint256 j = i;
+        if (index > 0 && updated.priority > validators[index - 1].priority) {
+            uint256 j = index;
 
-            while (j > 0 && validators[j - 1].priority < current.priority) {
+            while (j > 0 && updated.priority > validators[j - 1].priority) {
                 validators[j] = validators[j - 1];
                 j--;
             }
 
-            validators[j] = current;
+            validators[j] = updated;
+
+        } else if (index < n - 1 && updated.priority < validators[index + 1].priority) {
+            uint256 j = index;
+
+            while (j < n - 1 && updated.priority < validators[j + 1].priority) {
+                validators[j] = validators[j + 1];
+                j++;
+            }
+
+            validators[j] = updated;
         }
     }
 
@@ -144,7 +154,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         validator.priority = _priority;
 
         emit ValidatorUpdated(_validator, _minStakePerTx, _maxStake, _priority);
-        _sortUpdatedValidatorsByPriority();
+        _sortUpdatedValidatorsByPriority(uint256(index));
     }
 
 
