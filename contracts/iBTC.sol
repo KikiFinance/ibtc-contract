@@ -31,6 +31,7 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     event Withdraw(address indexed user, uint256 amount); // Emitted upon a successful withdrawal
     event ClaimReward(address indexed user, uint256 amount); // Emitted when a reward is claimed
     event RewardDistributed(uint256 amount); // Emitted when rewards are distributed
+    event StakeTransferred(address indexed user, address fromValidator, uint256 amount);
 
     function initialize(address _xbtc, address _xsat, address _stakeRouter) public initializer {
         __ERC20_init("iBTC", "iBTC");
@@ -171,9 +172,6 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
         }
 
         require(totalAmount > 0, "No unlocked withdrawal requests available");
-
-        // Finalize pending withdrawal with the StakeRouter
-        stakeRouter.claimPendingFunds();
     }
 
     function withdraw() external nonReentrant {
@@ -226,6 +224,18 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
         accRewardPerShare += (amount * PRECISION) / supply;
 
         emit RewardDistributed(amount);
+    }
+
+    // Transfer stake to StakeRouter
+    function transferStake(address _fromValidator, uint256 _amount) external nonReentrant {
+        require(_amount > 0, "Amount must be greater than 0");
+
+        // Call StakeRouter to perform the transfer
+        stakeRouter.executeStakeTransfer(msg.sender, _fromValidator, _amount);
+
+        // Mint new iBTC tokens to the user
+        _mint(msg.sender, _amount);
+        emit StakeTransferred(msg.sender, _fromValidator, _amount);
     }
 
     // Storage gap for upgradeable contracts

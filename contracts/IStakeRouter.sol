@@ -21,4 +21,7 @@ interface IStakeRouter {
     function finalizeRewardDistribution() external;
 
     function claimPendingFunds() external;
+
+    function executeStakeTransfer(address _user, address _fromValidator, uint256 _amount) external;
+
 }

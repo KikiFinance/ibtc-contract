@@ -28,6 +28,12 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     address public iBTC;
     IStakeHelper public stakeHelper;
     Validator[] public validators;
+    uint256 private constant PRECISION = 1e5; // Precision for reward calculations
+    uint256 public serviceFeePercentage; // Service fee percentage (scaled by 1e5 for precision, e.g., 1% = 1e3)
+    address public serviceFeeRecipient; // Address to receive the service fee
+    uint256 public pendingWithdrawAmount; // Accumulated withdrawal amount waiting to be processed
+    address public defaultValidator; // Default validator for transferStake
+
 
     event ValidatorAdded(address indexed validator, uint256 minStakePerTx, uint256 maxStake, uint256 priority);
     event ValidatorUpdated(address indexed validator, uint256 minStakePerTx, uint256 maxStake, uint256 priority);
@@ -38,6 +44,12 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     event RewardDistributedPrepare(address indexed validator);
     event RewardDistributed(uint256 amount);
     event Restake(address indexed from, address indexed to, uint256 amount);
+    event StakeTransferred(address indexed user, address fromValidator, address toValidator, uint256 amount);
+    event ServiceFeePercentageUpdated(uint256 oldServiceFeePercentage, uint256 newServiceFeePercentage);
+    event ServiceFeeRecipientUpdated(address oldServiceFeeRecipient, address newServiceFeeRecipient);
+    event PendingWithdrawAmountChanged(uint256 oldAmount, uint256 newAmount); // Emitted when the pending withdrawal amount changes
+    event DefaultValidatorUpdated(address oldValidator, address newValidator);
+
 
     modifier onlyIBTC() {
         require(msg.sender == iBTC, "Only the iBTC contract can call this function");
@@ -49,7 +61,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         _;
     }
 
-    function initialize(address _xbtc, address _xsat, address _stakeHelper) external initializer {
+    function initialize(address _xbtc, address _xsat, address _stakeHelper, address _serviceFeeRecipient, uint256 _serviceFeePercentage) external initializer {
         __Ownable_init();
         __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
@@ -61,6 +73,9 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         xbtc = IERC20(_xbtc);
         xsat = IERC20(_xsat);
         stakeHelper = IStakeHelper(_stakeHelper);
+
+        serviceFeeRecipient = _serviceFeeRecipient;
+        serviceFeePercentage = _serviceFeePercentage;
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -199,7 +214,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
                     stakeAmount = validators[i].maxStake - validators[i].currentStake;
                 }
                 stakeHelper.deposit(validators[i].validatorAddress, stakeAmount);
-                validators[i].currentStake += stakeAmount;
+                validators[i].currentStake = stakeHelper.stakeInfo(validators[i].validatorAddress,address(this));
                 remainingAmount -= stakeAmount;
                 emit Stake(validators[i].validatorAddress, stakeAmount);
             }
@@ -209,7 +224,15 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
 
     function withdraw(uint256 _amount) external onlyIBTC nonReentrant {
         require(_amount > 0, "Amount must be greater than zero");
-        uint256 remainingAmount = _amount;
+        uint256 oldAmount = pendingWithdrawAmount;
+        pendingWithdrawAmount += _amount;
+        emit PendingWithdrawAmountChanged(oldAmount, pendingWithdrawAmount);
+    }
+
+    function processBatchWithdrawals() external {
+        require(pendingWithdrawAmount > 0, "No pending withdrawals");
+
+        uint256 remainingAmount = pendingWithdrawAmount;
         for (uint256 j = validators.length; j > 0; j--) {
             uint256 i = j - 1; // Adjusting for zero-based index
             if (remainingAmount > 0 && validators[i].currentStake > 0) {
@@ -221,15 +244,19 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
                 }
 
                 stakeHelper.withdraw(validators[i].validatorAddress, withdrawAmount);
-                validators[i].currentStake -= withdrawAmount;
+                validators[i].currentStake = stakeHelper.stakeInfo(validators[i].validatorAddress,address(this));
                 remainingAmount -= withdrawAmount;
                 emit UnStake(validators[i].validatorAddress, withdrawAmount);
             }
         }
         require(remainingAmount == 0, "Unable to fulfill the entire withdrawal amount");
+        uint256 oldAmount = pendingWithdrawAmount;
+        pendingWithdrawAmount = 0;
+        emit PendingWithdrawAmountChanged(oldAmount, pendingWithdrawAmount);
     }
 
-    function claimPendingFunds() external onlyIBTC nonReentrant {
+
+    function claimPendingFunds() external {
         stakeHelper.claimPendingFunds();
         uint256 amount = xbtc.balanceOf(address(this));
         xbtc.safeTransfer(address(iBTC), amount);
@@ -249,13 +276,30 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     }
 
     function finalizeRewardDistribution() external onlyIBTC nonReentrant {
-        // transfer all xsat reward to iBTC
+        // Get the XSAT balance of the contract
         uint256 amount = xsat.balanceOf(address(this));
         require(amount > 0, "Balance error: Insufficient XSAT");
 
-        xsat.safeTransfer(address(iBTC), amount);
-        emit RewardDistributed(amount);
+        // Calculate the service fee if it's not zero
+        uint256 serviceFee = 0;
+        if (serviceFeePercentage > 0) {
+            // Check if serviceFeeRecipient is set
+            require(serviceFeeRecipient != address(0), "Service fee recipient not set");
+
+            serviceFee = (amount * serviceFeePercentage) / PRECISION;
+            // Transfer the service fee to the recipient (e.g., contract owner)
+            xsat.safeTransfer(serviceFeeRecipient, serviceFee);
+        }
+
+        // Subtract the service fee from the total amount to be transferred to iBTC
+        uint256 remainingAmount = amount - serviceFee;
+
+        // Transfer the remaining XSAT reward to the iBTC contract
+        xsat.safeTransfer(address(iBTC), remainingAmount);
+
+        emit RewardDistributed(remainingAmount);
     }
+
 
     function restake(address _from, address _to, uint256 _amount) external onlyOwner nonReentrant {
         require(_amount > 0, "Amount must be greater than zero");
@@ -279,8 +323,8 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         stakeHelper.restake(_from, _to, _amount);
 
         // Update validator stakes
-        fromValidator.currentStake -= _amount;
-        toValidator.currentStake += _amount;
+        fromValidator.currentStake = stakeHelper.stakeInfo(fromValidator.validatorAddress,address(this));
+        toValidator.currentStake = stakeHelper.stakeInfo(toValidator.validatorAddress,address(this));
 
         emit Restake(_from, _to, _amount);
     }
@@ -298,6 +342,50 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         return stakeHelper.lockTime();
     }
 
+    function setServiceFeePercentage(uint256 _serviceFeePercentage) external onlyOperator {
+        emit ServiceFeePercentageUpdated(serviceFeePercentage, _serviceFeePercentage);
+        serviceFeePercentage = _serviceFeePercentage;
+    }
+
+    function setServiceFeeRecipient(address _serviceFeeRecipient) external onlyOperator {
+        emit ServiceFeeRecipientUpdated(serviceFeeRecipient, _serviceFeeRecipient);
+        serviceFeeRecipient = _serviceFeeRecipient;
+    }
+
+    function setDefaultValidator(address _defaultValidator) external onlyOperator {
+        emit DefaultValidatorUpdated(defaultValidator, _defaultValidator);
+        defaultValidator = _defaultValidator;
+    }
+
+    function executeStakeTransfer(address _user, address _fromValidator, uint256 _amount) external onlyIBTC nonReentrant {
+        require(_amount > 0, "Amount must be greater than zero");
+
+        // Ensure there's at least one validator
+        require(defaultValidator != address(0), "Default validator not set");
+
+        address _toValidator = defaultValidator;
+
+        uint256 beforeAmount = stakeHelper.stakeInfo(_toValidator,address(this));
+
+        // Call stakeHelper to perform the transfer
+        stakeHelper.performTransfer(_user, _fromValidator, _toValidator, _amount);
+
+        uint256 afterAmount = stakeHelper.stakeInfo(_toValidator,address(this));
+
+        uint256 actualTransferAmount = afterAmount - beforeAmount;
+
+        require(actualTransferAmount == _amount, "The actual transfer amount does not match the expected amount.");
+
+        int256 index = getValidatorIndex(defaultValidator);
+        require(index >= 0, "Validator not found");
+
+        Validator storage validator = validators[uint256(index)];
+        validator.currentStake = afterAmount;
+
+        emit StakeTransferred(_user, _fromValidator, _toValidator, _amount);
+    }
+
+
     // Storage gap for upgradeable contracts
-    uint256[50] private __gap;
+    uint256[46] private __gap;
 }
