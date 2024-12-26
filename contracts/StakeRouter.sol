@@ -61,7 +61,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         _;
     }
 
-    function initialize(address _xbtc, address _xsat, address _stakeHelper, address _serviceFeeRecipient, uint256 _serviceFeePercentage) external initializer {
+    function initialize(address _xbtc, address _xsat, address _stakeHelper) external initializer {
         __Ownable_init();
         __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
@@ -73,9 +73,6 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         xbtc = IERC20(_xbtc);
         xsat = IERC20(_xsat);
         stakeHelper = IStakeHelper(_stakeHelper);
-
-        serviceFeeRecipient = _serviceFeeRecipient;
-        serviceFeePercentage = _serviceFeePercentage;
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -348,11 +345,13 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     }
 
     function setServiceFeeRecipient(address _serviceFeeRecipient) external onlyOperator {
+        require(_serviceFeeRecipient != address(0), "Service fee recipient cannot be the zero address");
         emit ServiceFeeRecipientUpdated(serviceFeeRecipient, _serviceFeeRecipient);
         serviceFeeRecipient = _serviceFeeRecipient;
     }
 
     function setDefaultValidator(address _defaultValidator) external onlyOperator {
+        require(_defaultValidator != address(0), "Default validator cannot be the zero address");
         emit DefaultValidatorUpdated(defaultValidator, _defaultValidator);
         defaultValidator = _defaultValidator;
     }
