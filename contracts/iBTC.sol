@@ -11,9 +11,11 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "./IStakeRouter.sol";
 import "./IiBTC.sol";
 import "./IXBTC.sol";
+import "./PausableUpgradeable.sol";
 
-contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpgradeable, UUPSUpgradeable {
+contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpgradeable, UUPSUpgradeable, PausableUpgradeable {
     using SafeERC20 for IERC20;
+    bytes32 public constant PAUSE_ROLE = keccak256("PAUSE_ROLE");
 
     IERC20 public xbtc; // XBTC token interface
     IERC20 public xsat; // XSAT token interface
@@ -24,6 +26,7 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     uint256 public accRewardPerShare; // Accumulated reward per iBTC share, scaled by PRECISION
     mapping(address => uint256) public userLastRewardPerShare; // Tracks the last accRewardPerShare for each user
     mapping(address => WithdrawalRequest[]) public userWithdrawals; // Tracks user-specific withdrawal requests
+    address public pauseOperator;
 
 
     event Deposit(address indexed user, uint256 amount); // Emitted when a deposit occurs
@@ -32,6 +35,8 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     event ClaimReward(address indexed user, uint256 amount); // Emitted when a reward is claimed
     event RewardDistributed(uint256 amount); // Emitted when rewards are distributed
     event StakeTransferred(address indexed user, address fromValidator, uint256 amount);
+    event PauseOperatorUpdated(address indexed oldOperator, address indexed newOperator);
+
 
     function initialize(address _xbtc, address _xsat, address _stakeRouter) public initializer {
         __ERC20_init("iBTC", "iBTC");
@@ -51,6 +56,24 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+
+    modifier onlyPauseOperator() {
+        require(pauseOperator == msg.sender, "Only Pause Operator can perform this action");
+        _;
+    }
+
+    function pause() public onlyPauseOperator {
+        _pause();
+    }
+
+    function unpause() public onlyOwner {
+        _unpause();
+    }
+
+    function setPauseOperator(address _pauseOperator) external onlyOwner {
+        emit PauseOperatorUpdated(pauseOperator, _pauseOperator);
+        pauseOperator = _pauseOperator;
+    }
 
     // Calculates the pending reward for a user based on their balance
     function _pendingReward(address userAddress) internal view returns (uint256) {
@@ -99,7 +122,7 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     }
 
     // Allows users to stake XBTC and mint an equivalent amount of iBTC tokens
-    function deposit(uint256 amount) public nonReentrant {
+    function deposit(uint256 amount) public nonReentrant whenNotPaused {
 
         require(amount > 0, "Amount must be greater than 0");
         xbtc.safeTransferFrom(msg.sender, address(this), amount);
@@ -114,7 +137,7 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
         emit Deposit(msg.sender, amount);
     }
 
-    function depositBTC() public payable nonReentrant {
+    function depositBTC() public payable nonReentrant whenNotPaused {
         uint256 amount = msg.value;
         require(amount > 0, "Amount must be greater than 0");
         ixbtc.deposit{value: amount}();
@@ -130,7 +153,7 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     }
 
     // Allows users to request the withdrawal of XBTC by burning iBTC tokens
-    function requestWithdraw(uint256 amount) external nonReentrant {
+    function requestWithdraw(uint256 amount) external nonReentrant whenNotPaused {
         uint256 userBalance = balanceOf(msg.sender);
         require(userBalance >= amount, "Insufficient iBTC balance");
         require(amount > 0, "Amount must be greater than zero");
@@ -174,7 +197,7 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
         require(totalAmount > 0, "No unlocked withdrawal requests available");
     }
 
-    function withdraw() external nonReentrant {
+    function withdraw() external nonReentrant whenNotPaused {
         uint256 totalAmount = _processWithdrawals();
 
         // Transfer the accumulated amount of XBTC to the user
@@ -183,7 +206,7 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
         emit Withdraw(msg.sender, totalAmount);
     }
 
-    function withdrawBTC() external nonReentrant {
+    function withdrawBTC() external nonReentrant whenNotPaused {
         uint256 totalAmount = _processWithdrawals();
 
         // Convert the XBTC to BTC using the XBTC contract's `withdraw` method
@@ -197,17 +220,17 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
 
 
     // Allows users to manually claim accumulated XSAT rewards
-    function claimReward() external nonReentrant {
+    function claimReward() external nonReentrant whenNotPaused {
         _settleReward(msg.sender);
     }
 
     // External function to trigger preparation for reward distribution
-    function prepareRewardDistribution() external nonReentrant {
+    function prepareRewardDistribution() external nonReentrant whenNotPaused {
         _prepareRewardDistribution();
     }
 
     // Finalizes reward distribution by updating accumulated rewards and recalculating rewards per share
-    function finalizeRewardDistribution() external nonReentrant {
+    function finalizeRewardDistribution() external nonReentrant whenNotPaused {
         uint256 supply = totalSupply();
         require(supply > 0, "No iBTC in circulation for reward distribution");
         // Record XSAT balance before claiming rewards
@@ -227,7 +250,7 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     }
 
     // Transfer stake to StakeRouter
-    function transferStake(address _fromValidator, uint256 _amount) external nonReentrant {
+    function transferStake(address _fromValidator, uint256 _amount) external nonReentrant whenNotPaused {
         require(_amount > 0, "Amount must be greater than 0");
 
         // Call StakeRouter to perform the transfer
@@ -239,5 +262,5 @@ contract iBTC is IiBTC, ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpg
     }
 
     // Storage gap for upgradeable contracts
-    uint256[50] private __gap;
+    uint256[49] private __gap;
 }

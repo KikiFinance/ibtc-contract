@@ -9,11 +9,13 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "./IStakeHelper.sol";
 import "./IStakeRouter.sol";
+import "./PausableUpgradeable.sol";
 
-contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessControlUpgradeable {
+contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgradeable, UUPSUpgradeable, AccessControlUpgradeable, PausableUpgradeable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
+    bytes32 public constant PAUSE_ROLE = keccak256("PAUSE_ROLE");
 
     struct Validator {
         address validatorAddress;
@@ -60,6 +62,20 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         require(hasRole(OPERATOR_ROLE, msg.sender), "Caller is not an operator");
         _;
     }
+
+    modifier onlyPauseOperator() {
+        require(hasRole(PAUSE_ROLE, msg.sender), "Only Pause Operator can perform this action");
+        _;
+    }
+
+    function pause() public onlyPauseOperator {
+        _pause();
+    }
+
+    function unpause() public onlyOwner {
+        _unpause();
+    }
+
 
     function initialize(address _xbtc, address _xsat, address _stakeHelper) external initializer {
         __Ownable_init();
@@ -129,7 +145,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         uint256 _minStakePerTx,
         uint256 _maxStake,
         uint256 _priority
-    ) external onlyOperator {
+    ) external onlyOperator whenNotPaused {
         require(_minStakePerTx <= _maxStake, "Minimum stake must be less than maximum stake");
 
         for (uint256 i = 0; i < validators.length; i++) {
@@ -146,7 +162,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         uint256 _minStakePerTx,
         uint256 _maxStake,
         uint256 _priority
-    ) external onlyOperator {
+    ) external onlyOperator whenNotPaused {
         require(_minStakePerTx <= _maxStake, "Minimum stake must be less than maximum stake");
 
         int256 index = getValidatorIndex(_validator);
@@ -170,7 +186,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     }
 
 
-    function removeValidator(address _validator) external onlyOperator {
+    function removeValidator(address _validator) external onlyOperator whenNotPaused {
         int256 index = getValidatorIndex(_validator);
         require(index >= 0, "Validator not found");
 
@@ -193,7 +209,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     }
 
 
-    function deposit(uint256 _amount) external onlyIBTC nonReentrant {
+    function deposit(uint256 _amount) external onlyIBTC nonReentrant whenNotPaused {
         require(_amount > 0, "Amount must be greater than 0");
         xbtc.safeTransferFrom(address(iBTC), address(this), _amount);
         // Stake to stakeHelper
@@ -219,14 +235,14 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         require(remainingAmount == 0, "Not enough validator capacity for stake");
     }
 
-    function withdraw(uint256 _amount) external onlyIBTC nonReentrant {
+    function withdraw(uint256 _amount) external onlyIBTC nonReentrant whenNotPaused {
         require(_amount > 0, "Amount must be greater than zero");
         uint256 oldAmount = pendingWithdrawAmount;
         pendingWithdrawAmount += _amount;
         emit PendingWithdrawAmountChanged(oldAmount, pendingWithdrawAmount);
     }
 
-    function processBatchWithdrawals() external {
+    function processBatchWithdrawals() external whenNotPaused {
         require(pendingWithdrawAmount > 0, "No pending withdrawals");
 
         uint256 remainingAmount = pendingWithdrawAmount;
@@ -253,7 +269,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     }
 
 
-    function claimPendingFunds() external {
+    function claimPendingFunds() external whenNotPaused {
         stakeHelper.claimPendingFunds();
         uint256 amount = xbtc.balanceOf(address(this));
         xbtc.safeTransfer(address(iBTC), amount);
@@ -268,11 +284,11 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         }
     }
 
-    function prepareRewardDistribution() external onlyIBTC nonReentrant {
+    function prepareRewardDistribution() external onlyIBTC nonReentrant whenNotPaused {
         _prepareRewardDistribution();
     }
 
-    function finalizeRewardDistribution() external onlyIBTC nonReentrant {
+    function finalizeRewardDistribution() external onlyIBTC nonReentrant whenNotPaused {
         // Get the XSAT balance of the contract
         uint256 amount = xsat.balanceOf(address(this));
         require(amount > 0, "Balance error: Insufficient XSAT");
@@ -298,7 +314,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     }
 
 
-    function restake(address _from, address _to, uint256 _amount) external onlyOwner nonReentrant {
+    function restake(address _from, address _to, uint256 _amount) external onlyOwner nonReentrant whenNotPaused {
         require(_amount > 0, "Amount must be greater than zero");
 
         // Get the indexes of the _from and _to validators
@@ -339,24 +355,24 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
         return stakeHelper.lockTime();
     }
 
-    function setServiceFeePercentage(uint256 _serviceFeePercentage) external onlyOperator {
+    function setServiceFeePercentage(uint256 _serviceFeePercentage) external onlyOperator whenNotPaused {
         emit ServiceFeePercentageUpdated(serviceFeePercentage, _serviceFeePercentage);
         serviceFeePercentage = _serviceFeePercentage;
     }
 
-    function setServiceFeeRecipient(address _serviceFeeRecipient) external onlyOperator {
+    function setServiceFeeRecipient(address _serviceFeeRecipient) external onlyOperator whenNotPaused {
         require(_serviceFeeRecipient != address(0), "Service fee recipient cannot be the zero address");
         emit ServiceFeeRecipientUpdated(serviceFeeRecipient, _serviceFeeRecipient);
         serviceFeeRecipient = _serviceFeeRecipient;
     }
 
-    function setDefaultValidator(address _defaultValidator) external onlyOperator {
+    function setDefaultValidator(address _defaultValidator) external onlyOperator whenNotPaused {
         require(_defaultValidator != address(0), "Default validator cannot be the zero address");
         emit DefaultValidatorUpdated(defaultValidator, _defaultValidator);
         defaultValidator = _defaultValidator;
     }
 
-    function executeStakeTransfer(address _user, address _fromValidator, uint256 _amount) external onlyIBTC nonReentrant {
+    function executeStakeTransfer(address _user, address _fromValidator, uint256 _amount) external onlyIBTC nonReentrant whenNotPaused {
         require(_amount > 0, "Amount must be greater than zero");
 
         // Ensure there's at least one validator
