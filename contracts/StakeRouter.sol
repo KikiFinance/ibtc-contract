@@ -314,7 +314,7 @@ contract StakeRouter is IStakeRouter, OwnableUpgradeable, ReentrancyGuardUpgrade
     }
 
 
-    function restake(address _from, address _to, uint256 _amount) external onlyOwner nonReentrant whenNotPaused {
+    function restake(address _from, address _to, uint256 _amount) external onlyOperator nonReentrant whenNotPaused {
         require(_amount > 0, "Amount must be greater than zero");
 
         // Get the indexes of the _from and _to validators
